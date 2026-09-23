@@ -3,7 +3,7 @@ import json
 import os
 import re
 import time
-
+from dotenv import load_dotenv
 import cv2
 import pandas as pd
 
@@ -24,11 +24,18 @@ from openai import OpenAI, APIStatusError, RateLimitError
 # PowerShell:
 #     $env:ACADEMIC_CLOUD_API_KEY="YOUR_KEY"
 
-API_KEY = "c4230084c776d861e5125d19088be3ec"
+load_dotenv()
 
-BASE_URL = "https://chat-ai.academiccloud.de/v1"
+API_KEY = os.getenv("ACADEMIC_CLOUD_API_KEY") or os.getenv("OPENAI_API_KEY")
+BASE_URL = os.getenv("ACADEMIC_CLOUD_BASE_URL", "https://chat-ai.academiccloud.de/v1")
+MODEL = os.getenv("MODEL_NAME", "qwen3-omni-30b-a3b-instruct")
 
-MODEL = "qwen3-omni-30b-a3b-instruct"
+if not API_KEY:
+    raise ValueError(
+        "API key not found. Please set 'ACADEMIC_CLOUD_API_KEY' or 'OPENAI_API_KEY' in your .env file or environment."
+    )
+
+
 
 
 # ============================================================
