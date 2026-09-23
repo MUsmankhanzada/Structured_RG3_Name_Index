@@ -127,6 +127,32 @@ _OCR_SPACE_RE = re.compile(
 )
 
 
+# OCR damage in the printed page runs, corrected against the original. Each key
+# is a verbatim, unique substring of one raw entry. Verified by hand:
+#   'Georgius ep. Patav.'    690 is 62 and 90 run together; 33359 is 333 and 359
+#   'Conradus Ludeking'      24 is a truncated 248
+#   'Ilarion de Bardis'      36 is a truncated 366
+#   'Wenc(z)eslaus Thyen'    30 is a truncated 302
+# NOTE: 'Sigismundus rex Roman. et Vngarie ... 243 151 258' is CORRECT as
+# printed, so page runs are not reliably ascending; treat a descending run as
+# something to check, never as something to auto-correct.
+PAGE_FIXES = {
+    "50 690 122": "50 62 90 122",
+    "300 33359 388": "300 333 359 388",
+    "218 24 319": "218 248 319",
+    "283 36.": "283 366.",
+    "223 30 329": "223 302 329",
+}
+
+
+def fix_page_numbers(text):
+    """Apply the hand-verified page-run corrections."""
+    for wrong, right in PAGE_FIXES.items():
+        if wrong in text:
+            text = text.replace(wrong, right)
+    return text
+
+
 def fix_ocr_spaces(text):
     """Rejoin the listed OCR space-breaks ('Sle sie' -> 'Slesie')."""
     return _OCR_SPACE_RE.sub(lambda m: OCR_SPACE_JOINS[m.group(0)], text)
@@ -571,7 +597,8 @@ def parse_entry(line):
         return None
     raw_original = line
 
-    text = fix_ocr_spaces(line)
+    text = fix_page_numbers(line)
+    text = fix_ocr_spaces(text)
     text = fix_unbalanced_brackets(text)
     text = fix_ocr_linebreaks(text)
     text = fix_inword_brackets(text)

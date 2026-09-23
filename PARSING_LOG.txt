@@ -1,0 +1,589 @@
+================================================================================
+PERSONENVERZEICHNIS SPLITTER - DEVELOPMENT LOG
+Repertorium Germanicum, index of persons
+Script: split_names.py
+Final output: 3,709 rows x 13 columns
+================================================================================
+
+This log records, in the order they were made, every rule and correction built
+into the parser. Each numbered entry states the trigger (what was observed in
+the data), the rule adopted, and the effect.
+
+
+================================================================================
+PART 1 - OUTPUT COLUMNS (final set)
+================================================================================
+
+  1.  raw_entry           source line, preserved verbatim (mojibake repaired)
+  2.  firstname           forename, incl. regnal numerals and iunior/senior
+  3.  firstname_variant   alternative spelling(s) of the forename
+  4.  familyname          surname, incl. its nobiliary particle
+  5.  familyname_variant  alternative spelling(s) of the surname
+  6.  alias               "al." / "dict." / "sive" / "seu" name
+  7.  relation            "relicta/natus/uxor/filius ..." clause
+  8.  zusatz              other bracketed additions; second de-group (origin)
+  9.  office              clerical / noble office or title
+ 10.  institution         church, monastery, hospital, house
+ 11.  reference           "v." (or "s.") cross-reference target
+ 12.  cf_reference        "; cf. X" cross-reference target
+ 13.  pages               column numbers of the printed index
+
+
+================================================================================
+PART 2 - ITERATION LOG
+================================================================================
+
+--------------------------------------------------------------------------------
+STAGE 1 - BASELINE SPLIT
+--------------------------------------------------------------------------------
+
+[1.1] Basic two-part split
+      Trigger : "Abelinus Vanderlinden 37."
+      Rule    : first word = firstname, remainder = familyname,
+                trailing digits = pages.
+
+[1.2] "de" as the family-name boundary
+      Trigger : "Abraham Abrahe de Nouacuria 43 243 309."
+      Rule    : everything before a standalone "de" = firstname;
+                "de" and everything after = familyname.
+      Effect  : firstname "Abraham Abrahe", familyname "de Nouacuria".
+
+[1.3] Bracketed name variants
+      Trigger : "Adam Nicolai de Banchow (Banchcow, Bankow) 37 289."
+      Rule    : a bracket following a name holds variant spellings of that
+                name. Bracket after the familyname -> familyname_variant;
+                bracket after the firstname -> firstname_variant.
+
+[1.4] Entries with no family name
+      Trigger : "Agnes (Hospes) 358."
+      Rule    : a single name goes to firstname; the bracket is classified
+                against it.
+
+
+--------------------------------------------------------------------------------
+STAGE 2 - VARIANT vs ZUSATZ
+--------------------------------------------------------------------------------
+
+[2.1] Similarity test for brackets                         -> zusatz column ADDED
+      Trigger : "Agnes (Heyncze de Brega) 311." - bracket unrelated to name.
+      Rule    : compare bracket content with the name it follows
+                (difflib.SequenceMatcher). >= 0.40 -> name variant;
+                below -> zusatz.
+      Note    : threshold is the module constant SIMILARITY_THRESHOLD.
+
+[2.2] Bracket beginning "de" is always zusatz
+      Trigger : "Affra (de Weyspruch) 110."
+      Rule    : content whose first two letters are "de" skips the similarity
+                test and goes straight to zusatz.
+
+[2.3] Multiple variants inside one bracket
+      Trigger : "(Banchcow, Bankow)", "(Aldigherius, Aldericus)"
+      Rule    : test each comma-separated item in turn; the FIRST one to
+                clear the threshold makes the whole bracket a variant
+                (short-circuit - no need to test the rest).
+
+[2.4] Several brackets in one entry
+      Trigger : "Goswinus (Goyswinus) Eychlo (Eichloe) 134 236."
+      Rule    : each bracket attaches to the nearest preceding name element
+                and is classified independently.
+
+
+--------------------------------------------------------------------------------
+STAGE 3 - STRUCTURAL PRIORITY RULES
+--------------------------------------------------------------------------------
+
+[3.1] BUG FIX - single-name entries went to the wrong column
+      Trigger : "Affra (de Weyspruch) 110." produced familyname "Affra",
+                firstname empty.
+      Cause   : the de-index fallback only applied at >= 2 words; with one
+                word the loop fell through to the familyname branch.
+      Fix     : when no split point exists, every word is a firstname.
+
+[3.2] Bracket boundary outranks the "de" rule
+      Trigger : "Aldigerius (Aldigherius, Aldericus) Francisci de Florena ..."
+      Rule    : if a bracket occurs BEFORE the standalone "de", the firstname
+                ends where that bracket opens and the familyname starts after
+                it closes. Checked before the de-rule.
+      Effect  : firstname "Aldigerius" (+variants), familyname
+                "Francisci de Florena".
+
+[3.3] Cross-references                              -> reference column ADDED
+      Trigger : "Anton v. Tiboldus.", "Elsa de Villanders v. Elizabeth."
+      Rule    : a standalone "v." splits name (left) from reference (right).
+                The name part then runs through the normal logic.
+
+
+--------------------------------------------------------------------------------
+STAGE 4 - OFFICES AND INSTITUTIONS
+--------------------------------------------------------------------------------
+
+[4.1] Office / institution extraction     -> office + institution columns ADDED
+      Trigger : "Erhardus (Gerardus) abb. mon. s. Lamberti in Sewn 110."
+      Rule    : scan for the first known role or institution abbreviation
+                (longest phrase wins, e.g. "vic. gen." before "vic.").
+                Everything before it = name; from it onward = role block.
+                Within the role block, the first INSTITUTION term splits
+                office from institution.
+      Effect  : office "abb.", institution "mon. s. Lamberti in Sewn".
+      Added   : "abb." alongside "abbat.".
+      Note    : this runs before the name logic, so a "de" inside an
+                institution ("mon. de Harbeyser") never reaches the name
+                splitter.
+
+
+--------------------------------------------------------------------------------
+STAGE 5 - FIRST FULL-CORPUS AUDIT (3,708 rows)
+--------------------------------------------------------------------------------
+
+[5.1] Page ranges with dashes - DATA LOSS
+      Trigger : "... 385—402.", "... 70 158 304—307 371."
+      Problem : the page regex walked back only over space-separated numbers,
+                so it captured "402" and "307 371" - losing 70 and 158.
+      Fix     : page tokens may be ranges joined by - , – or —.
+
+[5.2] "; cf. X" clauses - DATA LOSS         -> cf_reference column ADDED
+      Trigger : "Clemens de Alsentz 78; cf. Nicolaus Frederici de A."
+      Problem : the line ends in a letter, so no pages were found and the
+                whole tail landed in familyname.
+      Fix     : strip the cf. clause BEFORE page extraction, because the
+                pages sit in front of it.
+
+[5.3] "s." as "siehe" (see)
+      Trigger : "Venslaus, Vinceslaus s. Wenceslaus."
+      Problem : "s." is "sancti" in 48 other entries ("mon. s. Lamberti").
+      Rule    : treat "s." as a reference separator ONLY when the entry
+                contains no digits at all. Isolates exactly the one case.
+
+[5.4] Comma-listed forenames in cross-references
+      Trigger : "Guillelmus, Guilermus v. Wilhelmus."
+      Problem : "Guilermus" was going to familyname.
+      Rule    : in a pageless v./s. entry, "A, B v. C" gives firstname A,
+                firstname_variant B, reference C.
+
+[5.5] OCR line-break hyphens (14 rows)
+      Trigger : "Con-stancianen.", "Martin- kowo", "Eppen-steyn", "Ba- uarie"
+      Rule    : join hyphen (+ optional space) between two LOWERCASE letters.
+      Guard   : lowercase-only, so the deliberate suffix variants
+                "(-berg, -berch)" and "(-kink, -kinc)" are untouched.
+                Those are also classified as variants explicitly, by a
+                leading-hyphen rule, not by similarity score.
+
+[5.6] Popes and regnal numerals (12 rows)
+      Trigger : "Gregorius XII. (Angelus, Errorius) pp. 9 12 13."
+      Problem : familyname became "XII. pp." and the variants went to zusatz.
+      Rule    : roman numerals stay with the firstname; "pp." is an office.
+
+[5.7] Cardinal titulature
+      Trigger : "Alamannus tit. s. Eusebii presb. card. 39."
+      Problem : split at "presb.", stranding "tit. s. Eusebii" in the name.
+      Added   : tit. card. diac. patr. prior priorat. prep. prepos. dec.
+                decan. custos custod. scholast. scolast. thesaurar. can.
+                capit. natus nuncup. el. resp. quondam
+
+      RESULT  : rows with no pages 30 -> 26, and all 26 are genuine
+                cross-references. No row left without pages AND reference.
+
+
+--------------------------------------------------------------------------------
+STAGE 6 - ENCODING
+--------------------------------------------------------------------------------
+
+[6.1] Mojibake repair
+      Trigger : "Katherina (DumplÃ¶s) 206.", "385â€”402"
+      Cause   : UTF-8 bytes decoded as cp1252.
+      Rule    : encode cp1252 -> decode utf-8, repeated up to 3x.
+      Why cp1252, not latin-1 : "â€”" contains "€", absent from latin-1, so
+                a latin-1 round-trip raises and the em-dash is never fixed.
+                latin-1 is kept only as a fallback.
+      Guard   : runs only when marker characters (Ã, â€, Â, ...) are present
+                and only if the round-trip succeeds, so correct text with
+                real ö / ü / — is never altered.
+
+
+--------------------------------------------------------------------------------
+STAGE 7 - SECOND AUDIT: ALIAS AND RELATION
+--------------------------------------------------------------------------------
+
+[7.1] Alias markers (115 rows)                       -> alias column ADDED
+      Trigger : "Albertus Beyer al. Steneken 40."
+                "Andreas dict. Kelermaister 48."
+      Problem : "al." / "dict." are alias / dictus ("called"), not offices.
+                They were being swallowed into familyname; "Andreas dict.
+                Kelermaister" ended up with no real familyname at all.
+      Rule    : markers "al." "dict." "sive" "seu" introduce an alias.
+                They stack ("al. dict."), brackets stay attached to their
+                alias, and multiple aliases join with "; ".
+      Key point : a "de ..." AFTER alias content is the territorial family
+                name and is handed BACK to the name -
+                "Nicolaus Henrici al. dict. Schilchin (Schibchin) de
+                Cruczenaco" -> familyname "de Cruczenaco", alias
+                "Schilchin (Schibchin)".
+
+[7.2] Period-separated page runs - DATA LOSS
+      Trigger : "Arpinus de Collis de Alexandria 58. 345."
+                "Georgius Lichtenberg 127. 256."
+      Problem : captured only the last number; the first was left in
+                familyname.
+      Fix     : page tokens may be separated by whitespace and/or a period.
+
+[7.3] Further office terms
+      Added   : mag. / mag. gen. / ord. / priorissa / duxissa / ducis /
+                princeps / lantgr. / bar. / imp. / scol. / precept. /
+                thesaur. / not. / not. ap. sed. / ap. sed.
+
+[7.4] Relation clauses (34 rows)                  -> relation column ADDED
+      Trigger : "Agnes relictæ Herbordi Kuykens de Tremonia 38."
+                "Elisabet Vlrici bar. de Haenow uxor 107."
+      Rule    : markers relict*/relect* (prefix match), natus, nata, uxor,
+                filius, filia. Marker at the END -> everything after the
+                forename is the clause; marker mid-entry -> from the marker on.
+      ORDER   : this runs BEFORE the office scan, because the clause itself
+                contains office words ("bar.") that would otherwise shred it.
+      Note    : the prefix form was needed - OCR yields relictæ, relictä,
+                relictā and relecta.
+
+[7.5] Generational suffixes
+      Trigger : "Fredericus iunior lantgr. Thuringie 13."
+      Problem : familyname became "iunior".
+      Rule    : iunior / junior / senior / iun. / sen. stay with the
+                forename, like regnal numerals.
+
+[7.6] OCR typo "dc" for "de"
+      Trigger : "Bertoldus dc Kuczeleibin (Kuczelewen) 247 389."
+      Rule    : token-level normalisation dc -> de.
+
+
+--------------------------------------------------------------------------------
+STAGE 8 - HEADWORD POSITION (user challenge)
+--------------------------------------------------------------------------------
+
+[8.1] BUG FIX - a role word in the headword slot
+      Trigger : "Legatus de Werberge 89." -> office "Legatus de Werberge",
+                firstname EMPTY.
+      Evidence: the index is alphabetised by forename; this row sits between
+                "Laurentius Weys" and "Leo de Reiis", i.e. exactly where a
+                forename beginning "Leg-" belongs. It is a headword.
+      Fix     : the office scan starts at token 1, never token 0.
+      Effect  : firstname "Legatus", familyname "de Werberge".
+                (Superseded by the stronger rule at [10.1].)
+
+
+--------------------------------------------------------------------------------
+STAGE 9 - THIRD AUDIT: IN-WORD BRACKETS
+--------------------------------------------------------------------------------
+
+[9.1] Editorial in-word brackets (42 rows) - NAMES WERE BEING SHATTERED
+      Trigger : "Je(ronimus) Rutili"        -> firstname "Je"
+                "Johannes Hil(le)manni"     -> familyname "Hil manni"
+                "Fridericus Deys(t)"        -> "(t)" lost entirely
+      Cause   : a bracket glued to a word with no space is editorial - it
+                marks letters INSIDE one word - but the tokenizer split on it.
+      Disambiguator (splits the corpus 41 / 1):
+                lowercase content -> in-word letters
+                uppercase content -> a real variant that lost its space
+                                     ("Diick(Deyk)" -> a space is inserted)
+      Rule    : in-word parentheses are replaced by sentinel characters
+                before tokenizing and restored as each word token is built.
+
+[9.2] REVERSAL - no invented variants
+      First done : the contracted form was recorded as a variant
+                   ("Jeronimus" + variant "Je").
+      User note  : the raw entry asserts no such variant; the brackets
+                   expand an abbreviation, they do not record an alternative
+                   attested name.
+      Corrected  : nothing is written to the variant columns from an in-word
+                   bracket.
+      Effect     : firstname_variant 135 -> 131, familyname_variant 320 -> 291
+                   (the ~33 fabricated entries removed).
+
+[9.3] Source text kept verbatim (user request)
+      Rule    : the bracket is NOT expanded. The printed form is preserved:
+                  Je(ronimus)   Hil(le)manni   Deys(t)   de Bal(l)ionibus
+      Both mechanisms can co-occur in one entry:
+                "Wenc(z)eslaus (Vinceslaus) Thyen (Thiem, Thien)"
+                -> firstname "Wenc(z)eslaus", firstname_variant "Vinceslaus"
+
+[9.4] Unbalanced brackets (2 rows)
+      Trigger : "Schaczel (Scheczel 123 164."          (never closed)
+                "de Blaetzhem (Blatzhem, (Blaeczheim)" (doubled opener)
+      Rule    : stray openers inside an open group are dropped; an unclosed
+                group is closed before the page run.
+
+[9.5] Bare "al" without a period (2 rows) + alias bug
+      Trigger : "Johannes Wintheri de Rudensheim al de Gisenheim 238 255."
+      Problem : alias empty, familyname "de Rudensheim de Gisenheim".
+      Cause   : ANY "de" was treated as starting a territorial surname.
+      Fix     : "de" ends the alias only if alias content was already
+                collected; directly after the marker it belongs to the alias.
+      Effect  : familyname "de Rudensheim", alias "de Gisenheim".
+
+[9.6] Further office terms
+      Added   : archipresb. / castellanus / heres
+
+
+--------------------------------------------------------------------------------
+STAGE 10 - FOURTH AUDIT: CASE SENSITIVITY AND PARTICLES
+--------------------------------------------------------------------------------
+
+[10.1] Capitalised role words are SURNAMES (4 rows)
+      Trigger : "Johannes Rex 18."  "Hermannus Ducis 131."
+                "Johannes Ducis 152."  "Marcus Wenceslai dict. Dux 365."
+      Evidence: of 437 office blocks, EVERY genuine one begins lowercase
+                (ep. x107, abb. x80, dux x38, rex x8, ...). The only
+                capitalised ones were these four surnames.
+      Rule    : an office abbreviation matches only when printed lowercase.
+      Note    : this is the general form of [8.1] - position 0 was only a
+                proxy for what is really a capitalisation rule.
+
+[10.2] Bracketed nobiliary particle (9 rows)
+      Trigger : "Bertoldus (de) Cellis 65 254."
+      Problem : the bare "de" went to zusatz, severing the particle.
+      Rule    : a bracket holding only de/von/van/di/del/della is emitted as
+                a WORD token, kept verbatim, and marks the family-name
+                boundary like a plain "de".
+      Effect  : familyname "(de) Cellis".
+
+
+--------------------------------------------------------------------------------
+STAGE 11 - RECONSTRUCTION AUDIT
+--------------------------------------------------------------------------------
+
+[11.1] Method introduced
+      Every word of each raw entry is checked for presence somewhere in the
+      output columns. Anything unaccounted for is flagged. This is the test
+      that caught [11.2] and, retrospectively, [7.1].
+      RECOMMENDED as a permanent regression test.
+
+[11.2] Trailing semicolon (1 row)
+      Trigger : "Theodericus (Thidericus) de Murssen; aep. Colon. 152 347."
+      Problem : familyname "de Murssen;".
+      Fix     : strip trailing , ; : from word tokens (previously only ",").
+
+
+--------------------------------------------------------------------------------
+STAGE 12 - OCR SPACE BREAKS (user-confirmed against the original)
+--------------------------------------------------------------------------------
+
+[12.1] Explicit join table (7 rows)
+      Why a table and not a rule : structurally identical strings are
+      genuinely multi-word here and must NOT be joined -
+                "Wrgelo zu der golden luffe"
+                "Jacobus Men de villa Eschwilre"
+                "Conradus in Pomerio de Orba"
+                "Johannes van den Weghe de Ysendoren"
+
+      OCR_SPACE_JOINS:
+                Sle sie          -> Slesie          (2 rows)
+                Appsp erg        -> Appsperg
+                Dorn dorff       -> Dorndorff
+                Cy lia           -> Cylia
+                Wolfilsteyn er   -> Wolfilsteyner
+                Reyng hersuliet  -> Reynghersuliet
+
+      "Slesie" was corroborated by 6 correctly spelled instances elsewhere
+      in the index; the rest were verified by the user against the printed
+      original (confirmed: no space in the source).
+
+
+--------------------------------------------------------------------------------
+STAGE 13 - MERGED ENTRIES
+--------------------------------------------------------------------------------
+
+[13.1] Two index entries glued into one line (1 row)   -> ROW COUNT 3708->3709
+      Trigger : "Liebhardus, Liphardus v. Luphardus. Linka Strociurn 93."
+      Evidence: "Linka" belongs alphabetically between "Linhardus" and
+                "Liphardus", not appended to the "Liebhardus" entry.
+      Second effect : the stray "93" made the row look paginated, which
+                suppressed rule [5.4], so "Liphardus" went to familyname
+                instead of firstname_variant.
+      Rule    : split when a cross-reference part contains no digits, its
+                target is one ordinary capitalised word, and the remainder
+                starts with an ordinary capitalised word and ends in pages.
+      Guard   : leaves "Angelus Corario v. Gregorius XII. pp." and
+                "Petrus de Luna v. Benedictus XIII. pp. 312." alone,
+                because "pp." is not an ordinary capitalised word.
+      Result  : "Liebhardus, Liphardus v. Luphardus."  (fn + variant + ref)
+                "Linka Strociurn 93."                  (fn + familyname + pages)
+
+
+--------------------------------------------------------------------------------
+STAGE 14 - PLACE OF ORIGIN (user decision)
+--------------------------------------------------------------------------------
+
+[14.1] Second de-group -> zusatz (14 rows)
+      Trigger : "Antonius de Baldinotis de Pistorio 59."
+      Background : the second group is a place of origin, not part of the
+                surname - Pistorio = Pistoia, Bononia = Bologna,
+                Perusio = Perugia, Neapoli = Naples, Colonia = Cologne,
+                Nursia = Norcia. Mostly Italian humanists.
+      Decision (user) : move it to zusatz.
+      Rule    : scan familyname tokens from index 1 (index 0 is the
+                surname's own particle); at a second "de", move that token
+                and all following to zusatz.
+      Effect  : familyname "de Baldinotis", zusatz "de Pistorio".
+      Guard   : "de Wetze(de)" is untouched - its "(de)" is an in-word
+                bracket, not a separate token.
+
+[14.2] Other judgement calls - CONFIRMED AS-IS (no change)
+      "(?)" uncertain readings (4 rows) stay in zusatz:
+                Johannes Guinguin (?)      -> zusatz "?"
+                Koruonus de Bront (c ?)    -> zusatz "c ?"
+                Milich de Anicicz (?)      -> zusatz "?"
+                Petrus de Pairgin (?)      -> zusatz "?"
+      Dagger (1 row) stays in the name column:
+                "Erhardus †Johannis Tuffelin 111."
+                -> familyname "†Johannis Tuffelin"
+
+
+--------------------------------------------------------------------------------
+STAGE 15 - PAGE NUMBER CORRECTIONS (user-verified)
+--------------------------------------------------------------------------------
+
+[15.1] Ascending-order check introduced
+      Page runs ascend in 3,677 of 3,682 entries. The 5 exceptions were
+      inspected by the user against the printed original.
+
+[15.2] PAGE_FIXES applied
+      Two failure modes appeared - numbers run together by a lost space,
+      and numbers truncated to their leading digits.
+
+      Georgius ep. Patav.      50 690 122     -> 50 62 90 122     (run together)
+      Georgius ep. Patav.      300 33359 388  -> 300 333 359 388  (run together)
+      Conradus Ludeking        218 24 319     -> 218 248 319      (truncated)
+      Ilarion de Bardis        283 36.        -> 283 366.         (truncated)
+      Wenc(z)eslaus Thyen      223 30 329     -> 223 302 329      (truncated)
+
+      Each key was verified to occur exactly once in the corpus, so none can
+      misfire on another entry.
+
+[15.3] IMPORTANT - one descending run is CORRECT
+      "Sigismundus rex Roman. et Vngarie ... 238 243 151 258 ..."
+      Confirmed correct as printed. Page runs are therefore NOT reliably
+      ascending: treat a descending run as something to CHECK, never as
+      something to auto-correct. Recorded in the code comment above
+      PAGE_FIXES so it is not "fixed" by mistake later.
+
+
+================================================================================
+PART 3 - PROCESSING ORDER IN parse_entry()
+================================================================================
+
+Order matters; several rules only work because of where they sit.
+
+   0. fix_mojibake             encoding repair (also applied to raw_entry)
+   1. fix_page_numbers         verified page corrections        [15.2]
+   2. fix_ocr_spaces           verified space-break joins       [12.1]
+   3. fix_unbalanced_brackets  close / drop stray parentheses   [9.4]
+   4. fix_ocr_linebreaks       rejoin hyphen line breaks        [5.5]
+   5. fix_inword_brackets      protect in-word brackets         [9.1]
+   A. split_cf_clause          BEFORE pages - pages precede cf. [5.2]
+   B. extract_pages            ranges + period-separated runs   [5.1][7.2]
+   C. comma-listed forenames   pageless v./s. entries only      [5.4]
+   D. reference separator      "v." always, "s." only if no digits [3.3][5.3]
+   E. extract_relation         BEFORE offices - clause holds office words [7.4]
+   F. office / institution     scan from token 1, lowercase only [4.1][8.1][10.1]
+   G. extract_alias            de after alias content returns to name [7.1][9.5]
+   H. split_name_tokens        bracket priority, then de-rule    [3.2][1.2]
+      -> second de-group moved to zusatz                         [14.1]
+
+  split_merged_entries() runs in main(), before parse_entry()     [13.1]
+
+
+================================================================================
+PART 4 - FINAL VALIDATION
+================================================================================
+
+  rows                                   3,709
+  token loss (reconstruction audit)          0
+  empty firstname                            0
+  rows with no pages and no reference        0
+  trailing , ; : in name columns             0
+  capitalised office blocks                  0
+  mojibake survivors                         0
+  duplicate raw entries                      0
+  malformed page strings                     0
+  alias / relation markers left in names     0
+  unbalanced brackets in output              0
+  stray sentinel characters                  0
+  page numbers above 402                     0
+  non-ascending page runs                    1  (Sigismundus - correct)
+  familyname with two "de" groups            1  (de Wetze(de) - correct)
+
+  Column fill:
+    firstname 3709 | firstname_variant 132 | familyname 3009
+    familyname_variant 291 | alias 113 | relation 35 | zusatz 198
+    office 437 | institution 122 | reference 28 | cf_reference 4 | pages 3682
+
+
+================================================================================
+PART 5 - KNOWN OPEN ITEMS
+================================================================================
+
+[O1] ROW ORDER - "Linka Strociurn 93." (row 2491)
+     After the split at [13.1] this row sits immediately after the
+     "Liebhardus" cross-reference, but alphabetically it belongs AFTER
+     "Linhardus v. Leonardus." (row 2492). The CONTENT is correct; only the
+     position is off by one, inherited from where the OCR glued it.
+     Action: move down one row if sequence matters; ignore if loading into a
+     database keyed on the name.
+
+[O2] Stacked offices with a territorial particle
+     "Henricus com. de Hoya, ep. (el.) Verden. 15 145 217 357."
+     -> one merged office "com. de Hoya ep. (el.) Verden.", no familyname.
+     Two offices plus a territorial "de Hoya" is genuinely ambiguous.
+     Left as-is pending a decision.
+
+[O3] Alphabetical order is a POOR automated test
+     Successive attempts flagged 222, then 84, then 65 violations - all
+     false positives caused by the index's collation rules. Within a
+     forename group the printed order is:
+        (a) entries with a bracketed variant
+        (b) the bare forename
+        (c) forename + surname, alphabetically
+     Only [O1] was genuine. Use this check manually, not as a gate.
+
+
+================================================================================
+PART 6 - MAINTENANCE NOTES
+================================================================================
+
+  * Keep the reconstruction audit (PART 2, [11.1]) as a standing test. It is
+    the single most effective check - any new rule that silently eats text
+    shows up immediately.
+
+  * Lookup tables are deliberately explicit, not generalised. Extending them
+    is a one-line edit:
+        PAGE_FIXES         page-run corrections
+        OCR_SPACE_JOINS    space-break joins
+        TOKEN_FIXES        token typos (currently dc -> de)
+    Before adding a key, confirm the substring occurs exactly once in the
+    corpus, or it may misfire on another entry.
+
+  * Vocabulary lists that may need extending for other volumes:
+        PERSON_OR_ROLE_PREFIXES   offices and titles
+        INSTITUTION_PREFIXES      churches, monasteries, hospitals
+        ALIAS_MARKERS             al. dict. dictus dicta sive seu
+        RELATION_MARKERS          natus nata uxor filius filia
+        RELATION_PREFIXES         relict- relect-
+        NAME_SUFFIXES             iunior junior senior iun. sen.
+        NOBILIARY_PARTICLES       de von van di del della
+
+  * Office terms are matched LOWERCASE ONLY [10.1]. Adding a term that also
+    occurs as a surname is therefore safe, but verify the assumption still
+    holds if a new volume prints offices differently.
+
+  * SIMILARITY_THRESHOLD is 0.40. Lowering it moves zusatz entries into the
+    variant columns; raising it does the reverse. One known borderline case:
+    "Balduinus (Baldwinus) de Diick(Deyk)" - "Deyk" scores below 0.40
+    against "Diick" and lands in zusatz, although the glued bracket suggests
+    it is a variant.
+
+  * raw_entry stores the source text with mojibake repaired but WITHOUT the
+    OCR joins, hyphen rejoins and page corrections. Searching raw_entry for
+    "Sle sie" or "690" will therefore still match, while the parsed columns
+    carry the corrected forms. This is deliberate - the source reading stays
+    inspectable.
+
+================================================================================
+END OF LOG
+================================================================================
