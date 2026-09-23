@@ -40,12 +40,6 @@ MODEL_NAME=qwen3-omni-30b-a3b-instruct
 Only the key is required; the other two fall back to the defaults above.
 `OPENAI_API_KEY` is accepted as an alternative key name.
 
-Keep secrets and bulky intermediates out of version control:
-
-```gitignore
-.env
-*.csv
-```
 
 ---
 
