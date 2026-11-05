@@ -3,13 +3,14 @@
 Turns scanned pages of the *Repertorium Germanicum* person index into a
 structured CSV.
 
-Three stages, run in order:
+Four stages, run in order:
 
 | # | Script | In | Out |
 |---|---|---|---|
 | 1 | `grab.py` | page images | `personenverzeichnis_raw_final.csv` |
 | 2 | `preprocess.py` | raw CSV | `personenverzeichnis_raw_final_sorted.csv` |
 | 3 | `split_names.py` | sorted CSV | `personenverzeichnis_split.csv` |
+| 4 | `propose_xml.py` | split CSV | `personenverzeichnis.xml` |
 
 Current run: **3,709 entries**, 13 columns.
 
@@ -17,6 +18,7 @@ Current run: **3,709 entries**, 13 columns.
 python grab.py
 python preprocess.py
 python split_names.py
+python propose_xml.py
 ```
 
 ---
@@ -149,6 +151,39 @@ INPUT_COLUMN = "raw_entry"
 | `reference` | *v.* (or *s.*) cross-reference target |
 | `cf_reference` | *; cf. X* cross-reference target |
 | `pages` | column numbers of the printed index |
+
+---
+
+## Stage 4 — `propose_xml.py`
+
+Converts `personenverzeichnis_split.csv` to `personenverzeichnis.xml`. Each
+CSV row becomes one `<person>` element. Records are grouped under alphabetic
+`<index>` elements, and non-empty CSV columns are written as child elements.
+Blank fields are omitted; `raw_entry` is retained alongside the parsed fields.
+
+IDs are assigned sequentially from `1` in CSV row order, so they increase
+through the XML and remain stable as long as the input row order is unchanged.
+
+```bash
+python propose_xml.py
+python propose_xml.py --preview 5  # print five entries without writing XML
+python propose_xml.py input.csv -o output.xml
+```
+
+Example:
+
+```xml
+<personenverzeichnis volume="3">
+  <index type="personen" char="a">
+    <person id="1">
+      <raw_entry>Abelinus Vanderlinden 37.</raw_entry>
+      <firstname>Abelinus</firstname>
+      <familyname>Vanderlinden</familyname>
+      <pages>37</pages>
+    </person>
+  </index>
+</personenverzeichnis>
+```
 
 ---
 
